@@ -15,7 +15,9 @@ require(tidyverse) # Unidos de Hadley
 library(janitor)
 library(lubridate)
 library(hms)
+library(readr)
 
+# Analise Exploratoria dos data-frames
 library(skimr)
 
 # Scraping
@@ -61,34 +63,27 @@ ex_nt <- read_html("https://www25.senado.leg.br/web/atividade/notas-taquigrafica
 ```
 
 
-Por meio de uma função simples, consigo abrir essa página, idenficar a página simplificada que é chamada dentro dessa e transformar a tabela do Escriba em um tibble:
+Por meio de uma função simples, consigo abrir essa página, idenficar um iframe que é chamado
 
 ```{r}
 
 ex_nt_0 <- ex_nt  %>% 
   html_nodes(".escriba-jq") %>% 
-  html_attr("data-url") %>% 
-  read_html() %>% 
-  html_nodes("#tabelaQuartos") %>% 
-  html_table()
+  html_attr("data-url")
+  # Dá para ver que as notas taquigráficas são chamadas em uma URL
 
 ex_nt_0
 
 ```
 
 
-
-
 Aqui uma versão "limpa" da tabela:
 
 ```{r}
 
-ex_nt_0 <- read_html("https://www25.senado.leg.br/web/atividade/notas-taquigraficas?p_p_id=escriba_WAR_atividadeportlet&p_p_lifecycle=2&p_p_state=normal&p_p_mode=view&p_p_cacheability=cacheLevelPage&p_p_col_id=column-1&p_p_col_count=1&_escriba_WAR_atividadeportlet_cr=10111") %>% 
-  html_nodes("#tabelaQuartos") %>% 
-  html_table()
-
-
-ex_nt_1 <-  ex_nt_0 %>% 
+ex_nt_1 <- ex_nt_0 %>% 
+  read_html() %>% 
+  html_table() %>% 
   .[[1]] %>% 
   clean_names() %>% 
   mutate(horario = hm(horario, quiet = TRUE)) %>% 
@@ -125,7 +120,7 @@ ex_nt_2
 
 ```
 
-Posso também contar quanto tempo durou cada bloco de transcrição (aparentemente a Escriba quebra em blocos de 4 minutos). Como cada bloco pode ter mais de um orador, também posso explodir os parágrafos de cada bloco.
+Aqui eu explodo os blocos de transcrição (que duram em média 4min) para ter cada frase isoladamente.
 
 ```{r}
 
@@ -136,87 +131,56 @@ ex_nt_3
 
 ```
 
-Posso, por último, identificar quem estava com a palavra, isolar a transcrição apenas e ajustar as horas de acordo com a proporção de texto o de cada bloco.
+Posso, por último, identificar quem estava com a palavra, isolar a transcrição apenas.
 
 ```{r}
 
 ex_nt_4 <- ex_nt_3 %>%
   rowwise() %>%
-  mutate(
-    orador = if (!is.na(str_locate(str_sub(texto_com_revisao_b, 1, 5), "SR")[1])) {
-      str_sub(
-        texto_com_revisao_b,
-        str_locate(texto_com_revisao_b, "SR")[1],
-        coalesce(
-          str_locate(str_sub(texto_com_revisao_b, 1, 100), "\\) \\– ")[2] - 3,
-          str_locate(str_sub(texto_com_revisao_b, 1, 50), "[A-Z][A-Z][A-Z][A-Z] – ")[1] + 3
-        )
-      )
-    } else {
-      NA
-    },
-    fala = if (!is.na(str_locate(str_sub(texto_com_revisao_b, 1, 5), "SR")[1])) {
-      str_sub(
-        texto_com_revisao_b,
-        coalesce(
-          str_locate(str_sub(texto_com_revisao_b, 1, 200), "\\) \\– ")[2],
-          str_locate(str_sub(texto_com_revisao_b, 1, 200), "[A-Z][A-Z][A-Z][A-Z] – ")[2]
-        ),
-        str_length(texto_com_revisao_b)
-      )
-    } else {
-      texto_com_revisao_b
-    }
-  ) %>%
-  # Agora desativo o row-wise e preencho os dados do orador nos parágrafos vazios
-  ungroup() %>%
-  fill(orador, .direction = "down") %>%
-  rowwise() %>%
-  # Agora faço o split de orador entre o nome do orador/depoente e os comentários atrelados.
-  mutate(
-    comentario = str_extract(orador, "(?<=\\()[^()]+(?=\\))"),
-    orador = str_remove_all(orador, "SR. |SRA. | \\s*\\([^\\)]+\\)"))
+      mutate(
+        orador = if (!is.na(str_locate(str_sub(texto_com_revisao_b, 1, 5), "SR")[1])) {
+          str_sub(
+            texto_com_revisao_b,
+            str_locate(texto_com_revisao_b, "SR")[1],
+            coalesce(
+              str_locate(str_sub(texto_com_revisao_b, 1, 120), "\\) \\– ")[2] - 3,
+              str_locate(str_sub(texto_com_revisao_b, 1, 50), "[A-Z][A-Z][A-Z][A-Z] – ")[1] + 3
+            )
+          )
+        } else {
+          NA
+        },
+        fala = if (!is.na(str_locate(str_sub(texto_com_revisao_b, 1, 5), "SR")[1])) {
+          str_sub(
+            texto_com_revisao_b,
+            coalesce(
+              str_locate(str_sub(texto_com_revisao_b, 1, 200), "\\) \\– ")[2],
+              str_locate(str_sub(texto_com_revisao_b, 1, 200), "[:upper:][:upper:][:upper:][:upper:] – ")[2]
+            ),
+            str_length(texto_com_revisao_b)
+          )
+        } else {
+          texto_com_revisao_b
+        }
+      ) %>%
+      ungroup() %>%
+      fill(orador, .direction = "down")
   
 ```
 
+Agora já consigo extrair bastante dado. 
+
+Vou terminar a manipulação depois que conseguir empilhar todas as notas de todas as sessões.
 
 ```{r}
-
-ex_nt_5 <- ex_nt_4 %>% 
-  mutate(
-    intervalo = str_detect(texto_com_revisao_b, "\\(Suspensa às"),
-    hora_inicio = hms(ifelse(intervalo, 
-                             hms(hm(str_extract(texto_com_revisao_b, "(?<=Suspensa às )[^()]+(?=\\,)"))),
-                             hora_inicio)),
-    npalavras = str_count(str_remove_all(fala, "\\s*\\([^\\)]+\\)"), "\\W+")
-  ) %>% 
-  ungroup %>% 
-    mutate(
-      hora_fim = rep(lead(unique(hora_inicio)), table(hora_inicio)),
-      ) %>%
-  rowwise %>% 
-  mutate(hora_fim = replace_na(hora_fim, hora_inicio + as.duration("4 minutes"))
-         ) %>% 
-  group_by(hora_inicio) %>%
-  mutate(duracao = (hora_fim - hora_inicio) * replace_na(npalavras/sum(npalavras),1),
-         posicao = (hora_fim - hora_inicio) * replace_na(cumsum(replace_na(lag(npalavras),0)) / sum(npalavras),0)
-         ) %>% 
-  ungroup %>% 
-  mutate(
-    hora_inicio = hms::as_hms(hora_inicio + posicao),
-    hora_fim = hms::as_hms(hora_inicio + duracao)
-    ) %>% 
-  select(data, hora_inicio, hora_fim, duracao, intervalo, orador, comentario, fala, audio, bloco_escriba = horario)
-  
-ex_nt_5
-
+rm(list=ls(pattern="ex_nt"))
 ```
 
-Ouvindo o audio de alguns trechos, fica claro que a marcação proporcional ao número de palavras não é precisa, especialmente no começo da sessão, mas é o melhor que temos por hora.
 
 ## Explorando a lista de Sessões da CPI
 
 Começo trazendo a [lista se sessões](https://legis.senado.leg.br/comissoes/comissao?codcol=2441&data1=2021-03-01&data2=2021-11-01) para dentro do r a página
+
 ```{r}
 web_pandemia <- read_html("https://legis.senado.leg.br/comissoes/comissao?codcol=2441&data1=2021-03-01&data2=2021-11-01")
 ```
@@ -320,40 +284,9 @@ read_nt <- function(escriba_url) {
 ```
 
 
-
-```{r}
-%>%
-      # ex_nt_5 - Ajusta as horas
-      mutate(
-        intervalo = str_detect(texto_com_revisao_b, "\\(Suspensa às"),
-        hora_inicio = hms(ifelse(intervalo,
-          hms(hm(str_extract(texto_com_revisao_b, "(?<=Suspensa às )[^()]+(?=\\,)"))),
-          hora_inicio
-        )),
-        npalavras = str_count(str_remove_all(fala, "\\s*\\([^\\)]+\\)"), "\\W+")
-      ) %>%
-      ungroup() %>%
-      mutate(
-        hora_fim = rep(lead(unique(hora_inicio)), table(hora_inicio)),
-      ) %>%
-      rowwise() %>%
-      mutate(hora_fim = replace_na(hora_fim, hora_inicio + as.duration("4 minutes"))) %>%
-      group_by(hora_inicio) %>%
-      mutate(
-        duracao = (hora_fim - hora_inicio) * replace_na(npalavras / sum(npalavras), 1),
-        posicao = (hora_fim - hora_inicio) * replace_na(cumsum(replace_na(lag(npalavras), 0)) / sum(npalavras), 0)
-      ) %>%
-      ungroup() %>%
-      mutate(
-        hora_inicio = hms::as_hms(hora_inicio + posicao),
-        hora_fim = hms::as_hms(hora_inicio + duracao)
-      )
-```
-
-
 Agora eu tento aplicar essa função na lista de sessões que preparei.
 
-Atenção: Esse processo é meio lento, ele carrega pagina por pagina do Senado. Além disso, o Senado por achar que estamos fazendo um ataque DOS...
+Atenção: Esse processo é meio lento, ele carrega pagina por pagina do Senado. Além disso, o Senado pode se incomodar com a metralhadora de acessos que o r gera e achar que estamos fazendo um ataque DOS...
 
 ```{r}
 
@@ -365,18 +298,22 @@ full_meetings <- meetings %>%
 
 Temos agora uma lista das reuniões e suas respectivas notas taquigráficas. Podemos explodir esse arquivo e ver cada parágrafo das notas taquigráficas de toda a CPI, os oradores, o que foi dito e os horários estimados em que o orador/depoente discursava
 
+## Empilhando e limpando as notas taquigráficas
+
+Esse script ficou super grande e certamente pouco eficiente. Depois de fazer o "unnest" das notas taquigráficas eu fui fazendo os ajustes passo a passo, linha a linha e, a cada passo, fui jogando no skimr e checando os erros, NA, incosistências. Trabalho chato que durou umas 4 horas (pode chamar de Feature Engineering, mas eu chamo de pelação de saco). 
+
+Ao terminar, estava sem saco de otimizar e esculpir melhor esse script.
+
+Também fiquei na dúvida se não deveria jogar parte desses mutates para a função que traz os arquivos.
+
 ```{r}
 
-full_notas <- full_meetings %>% 
-  rename(data_meeting = data) %>% 
-  unnest(cols = c(nota)) %>% 
-  rename(bloco_escriba = horario) %>% 
-  filter(!is.na(bloco_escriba)) %>% 
-  select(-nota)
-
-#skim(full_notas)
-
-full_notas_a <-full_notas %>%
+full_notas <- full_meetings %>%
+  rename(data_meeting = data) %>%
+  unnest(cols = c(nota)) %>%
+  rename(bloco_escriba = horario) %>%
+  filter(!is.na(bloco_escriba)) %>%
+  select(-nota) %>%
   rowwise() %>%
   mutate(
     comentario = str_extract(orador, "(?<=\\()[^()]+(?=\\))"),
@@ -387,68 +324,74 @@ full_notas_a <-full_notas %>%
       hora_inicio
     )),
     npalavras = str_count(str_remove_all(fala, "\\s*\\([^\\)]+\\)"), "\\W+")
-  ) %>% 
-  ungroup() %>% 
-  filter(!is.na(hora_inicio))
-
-#skim(full_notas_a)
-
-full_notas_b <-full_notas_a %>% 
-  group_by(data_meeting) %>% 
+  ) %>%
+  ungroup() %>%
+  filter(!is.na(hora_inicio)) %>%
+  group_by(data_meeting) %>%
   mutate(
-        hora_fim = coalesce(rep(lead(unique(hora_inicio)), table(hora_inicio)), hora_inicio + as.duration("4 minutes"))
-      )
-
-#skim(full_notas_b %>% ungroup)
-
-full_notas_c <- full_notas_b %>% 
+    hora_fim = coalesce(rep(lead(unique(hora_inicio)), table(hora_inicio)), hora_inicio + as.duration("4 minutes"))
+  ) %>%
   rowwise() %>%
   group_by(data, hora_inicio) %>%
   mutate(
     duracao = (hora_fim - hora_inicio) * replace_na(npalavras / sum(npalavras), 1),
     posicao = (hora_fim - hora_inicio) * replace_na(cumsum(replace_na(lag(npalavras), 0)) / sum(npalavras), 0)
-  )
-
-#skim(full_notas_c %>% ungroup)
-
-full_notas_d <- full_notas_c %>% 
+  ) %>%
   ungroup() %>%
   mutate(
-    hora_inicio = hms::as_hms(hora_inicio + posicao),
-    hora_fim = hms::as_hms(hora_inicio + duracao)
-  )
+    hora_inicio = round_hms(as_hms(hora_inicio + posicao), digits = 0),
+    hora_fim = round_hms(as_hms(hora_inicio + duracao), digits =0)
+  ) %>%
+  arrange(data, hora_inicio) %>%
+  select(titulo, tema, data, hora_inicio, hora_fim, intervalo, duracao, orador, comentario, fala, audio)
 
-#skim(full_notas_d %>% ungroup)
-
-
-full_notas_d %>% 
-  filter(duracao <0)
-
-full_notas_b %>% 
-  filter(id == 10190 & bloco_escriba >= as_hms("12:14:00"))
-
-full_notas_d %>% 
-  filter(id == 10190 & bloco_escriba >= as_hms("12:14:00"))
-
-  mutate(datahora = as_datetime(data) + horario) %>% # criando uma coluna com a data e a hora
-  select(titulo, tema, datahora, orador, comentario, fala, audio, duracao, data, bloco) %>% 
-  arrange(datahora) %>% 
-  mutate_if(is.character, str_trim)
+# skim(full_notas)
 
 ```
+
+
+# Carregando os dados de Audiencia
+Aqui uso uma base de dados brutas do Ibope. Essa base tem os dados do painel da Kantar Ibope Media e me diz quantas pessoas estavam sintonizadas em cada canal minuto a minuto. Isolei as variárivel Total TV, que conta todos os aparelhos de TV ligados nos 15 mercados do PNT e os canais GloboNews e CNN.
+
+Essa base do Ibope é confidencial.
+
+```{r}
+convert.to.sec <- function(X) {
+  X <- strsplit(X, ":")
+  sapply(X, function(Y) sum(as.numeric(Y) * c(3600, 60, 1)))
+}
+
+ratings <- read_csv("raw_data/news_ratings.csv", 
+                    col_names = c("channel", "data", "hora", "trp", "abs"),
+                    col_types = cols(data = col_date(format = "%Y-%m-%d"),
+                                     hora = col_character()), 
+                    skip = 3) %>% 
+  mutate(datahora = data + seconds(convert.to.sec(hora)),
+         data = date(datahora),
+         hora = as_hms(paste(hour(datahora),minute(datahora),"00", sep = ":"))) %>% 
+  pivot_wider(id_cols = c("data", "hora"), names_from = channel, values_from = abs)
+
+
+
+```
+
+
+
+
 
 # Analise Preliminar dos Dados
 
 ### As Sessões
 ```{r}
 full_notas %>% 
-  group_by(titulo) %>% 
+  arrange(data) %>% 
+  group_by(as_factor(titulo)) %>% 
+  filter(intervalo == FALSE) %>% 
   summarise(n = n(),
-            inicio = min(datahora),
-            fim = max(datahora),
-            tempo = as.duration(max(datahora) - min(datahora)),
-            duracao = as.duration(sum(duracao))) %>% 
-  arrange(inicio)
+            hora_inicio = as_hms(min(hora_inicio)),
+            hora_fim = as_hms(max(hora_fim)),
+            tempo = as.duration(hora_fim - hora_inicio),
+            duracao = as.duration(sum(duracao))) 
 
 ```
 
