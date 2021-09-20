@@ -58,7 +58,7 @@ Já sabemos quando ocorreram as sessões públicas e temos como extrair as notas
 Começo importando uma página de notas taquigráficas de uma sessão. Aqui eu escolhi a sessão [16/09/2021 - 55ª - CPI da Pandemia](https://www25.senado.leg.br/web/atividade/notas-taquigraficas/-/notas/r/10242):
 
 ```{r}
-ex_nt <- read_html("https://www25.senado.leg.br/web/atividade/notas-taquigraficas/-/notas/r/10111")
+ex_nt <- read_html("https://www25.senado.leg.br/web/atividade/notas-taquigraficas/-/notas/r/9995")
 
 ```
 
@@ -144,7 +144,7 @@ ex_nt_4 <- ex_nt_3 %>%
             str_locate(texto_com_revisao_b, "SR")[1],
             coalesce(
               str_locate(str_sub(texto_com_revisao_b, 1, 120), "\\) \\– ")[2] - 3,
-              str_locate(str_sub(texto_com_revisao_b, 1, 50), "[A-Z][A-Z][A-Z][A-Z] – ")[1] + 3
+              str_locate(str_sub(texto_com_revisao_b, 1, 50), "[:upper:][:upper:][:upper:][:upper:] – ")[1] + 3
             )
           )
         } else {
@@ -163,8 +163,8 @@ ex_nt_4 <- ex_nt_3 %>%
           texto_com_revisao_b
         }
       ) %>%
-      ungroup() %>%
-      fill(orador, .direction = "down")
+      ungroup() #%>%
+      #fill(orador, .direction = "down")
   
 ```
 
@@ -258,7 +258,7 @@ read_nt <- function(escriba_url) {
             str_locate(texto_com_revisao_b, "SR")[1],
             coalesce(
               str_locate(str_sub(texto_com_revisao_b, 1, 120), "\\) \\– ")[2] - 3,
-              str_locate(str_sub(texto_com_revisao_b, 1, 50), "[A-Z][A-Z][A-Z][A-Z] – ")[1] + 3
+              str_locate(str_sub(texto_com_revisao_b, 1, 50), "[:upper:][:upper:][:upper:][:upper:] – ")[1] + 3
             )
           )
         } else {
@@ -300,7 +300,9 @@ Temos agora uma lista das reuniões e suas respectivas notas taquigráficas. Pod
 
 ## Empilhando e limpando as notas taquigráficas
 
-Esse script ficou super grande e certamente pouco eficiente. Depois de fazer o "unnest" das notas taquigráficas eu fui fazendo os ajustes passo a passo, linha a linha e, a cada passo, fui jogando no skimr e checando os erros, NA, incosistências. Trabalho chato que durou umas 4 horas (pode chamar de Feature Engineering, mas eu chamo de pelação de saco). 
+Esse script ficou super grande e certamente pouco eficiente. 
+
+Depois de fazer o "unnest" das notas taquigráficas eu fui fazendo os ajustes passo a passo, linha a linha e, a cada passo, fui jogando no skimr e checando os erros, NA, incosistências. Trabalho chato que durou umas 4 horas (pode chamar de Feature Engineering, mas eu chamo de pelação de saco). 
 
 Ao terminar, estava sem saco de otimizar e esculpir melhor esse script.
 
@@ -316,8 +318,11 @@ full_notas <- full_meetings %>%
   select(-nota) %>%
   rowwise() %>%
   mutate(
+    fala = str_trim(fala),
     comentario = str_extract(orador, "(?<=\\()[^()]+(?=\\))"),
     orador = str_remove_all(orador, "SR. |SRA. | \\s*\\([^\\)]+\\)"),
+    presidente = ifelse(orador == "PRESIDENTE", TRUE, FALSE),
+    orador = ifelse(orador == "PRESIDENTE", str_to_upper(str_sub(comentario, 1, str_locate(comentario, "\\.")[1]-1)), orador),
     intervalo = str_detect(texto_com_revisao_b, "\\(Suspensa às"),
     hora_inicio = hms(ifelse(intervalo,
       max(hms(hm(str_extract(texto_com_revisao_b, "(?<=Suspensa às )[^()]+(?=\\,)"), quiet = TRUE)), hora_inicio + as.duration("5 seconds")),
@@ -343,7 +348,7 @@ full_notas <- full_meetings %>%
     hora_fim = round_hms(as_hms(hora_inicio + duracao), digits =0)
   ) %>%
   arrange(data, hora_inicio) %>%
-  select(titulo, tema, data, hora_inicio, hora_fim, intervalo, duracao, orador, comentario, fala, audio)
+  select(id, titulo, tema, data, hora_inicio, hora_fim, intervalo, duracao, orador, presidente, comentario, fala, audio, bloco_escriba)
 
 # skim(full_notas)
 
@@ -367,15 +372,21 @@ ratings <- read_csv("raw_data/news_ratings.csv",
                                      hora = col_character()), 
                     skip = 3) %>% 
   mutate(datahora = data + seconds(convert.to.sec(hora)),
-         data = date(datahora),
-         hora = as_hms(paste(hour(datahora),minute(datahora),"00", sep = ":"))) %>% 
-  pivot_wider(id_cols = c("data", "hora"), names_from = channel, values_from = abs)
-
-
+         # data = date(datahora),
+         # hora = as_hms(paste(hour(datahora),minute(datahora),"00", sep = ":"))
+         ) %>% 
+  pivot_wider(id_cols = c("datahora"), names_from = channel, values_from = abs) %>% 
+  clean_names
 
 ```
 
 
+```{r}
+
+
+
+
+```
 
 
 
@@ -384,36 +395,20 @@ ratings <- read_csv("raw_data/news_ratings.csv",
 ### As Sessões
 ```{r}
 full_notas %>% 
-  arrange(data) %>% 
-  group_by(as_factor(titulo)) %>% 
+  arrange(data, hora_inicio) %>% 
+  group_by(as_factor(titulo), id, tema) %>% 
   filter(intervalo == FALSE) %>% 
   summarise(n = n(),
             hora_inicio = as_hms(min(hora_inicio)),
             hora_fim = as_hms(max(hora_fim)),
             tempo = as.duration(hora_fim - hora_inicio),
-            duracao = as.duration(sum(duracao))) 
-
-```
-
-
-E essa "10ª, Reunião - Semipresencial" que durou mais que um dia?
-```{r}
-
-full_notas %>%  
-  filter(titulo == "10ª, Reunião - Semipresencial") %>% 
-  View()
+            duracao = as.duration(sum(duracao)))
 
 
 full_notas %>% 
-  filter(str_detect(fala, "\\(Suspensa às")) %>% 
-  select(datahora, fala) %>% 
-  mutate(inicio = hm(str_extract(fala, "(?<=Suspensa às )[^()]+(?=\\,)")),
-         fim = hm(str_extract(fala, "(?<=reaberta às )[^()]+(?=\\.|\\))"))) %>% 
-  filter(!is.na(inicio)|!is.na(fim))
-
+  write_excel_csv("export.xls", delim = "\t")
 
 ```
-
 
 
 ### Quem falou mais
@@ -421,10 +416,18 @@ full_notas %>%
 ```{r}
 
 full_notas %>% 
-  filter(str_detect(orador,"PRESIDENTE")) %>% 
-  group_by(orador, comentario) %>% 
+  filter(intervalo == FALSE) %>% 
+  arrange(data, hora_inicio) %>% 
+  group_by(as_factor(titulo), id, tema, orador) %>% 
   summarise(duracao = as.duration(sum(duracao))) %>% 
-  arrange(desc(duracao))
+  arrange(desc(duracao), .by_group = TRUE)
+
+
+full_notas %>% 
+  filter(intervalo == FALSE) %>% 
+  group_by(orador) %>% 
+  summarise(duracao = as.duration(sum(duracao))) %>% 
+  arrange(desc(duracao), .by_group = TRUE)
 
 ```
 
@@ -444,6 +447,72 @@ full_notas %>%
 Pegando as datas para a geração de um export de audiência
 ```{r}
 
+library(readxl)
+oradores <- read_excel("mapa.xlsx", sheet = "Oradores")
+sessoes <- read_excel("mapa.xlsx", sheet = "Sessoes")
+
+janelas_depoimento <- full_notas %>% 
+  left_join(sessoes %>% select(-tema) %>% mutate(id = as.character(id)), by = c("id")) %>% 
+  left_join(oradores, by = c("orador")) %>% 
+  filter(intervalo == FALSE & presidente == FALSE & condicao != "SENADOR" & !is.na(depoente)) %>% 
+  group_by(id, data) %>% 
+  summarise(inicio_depoimento = as_hms(min(hora_inicio)),
+            fim_depoimento = as_hms(max(hora_fim)))
+
+
+palavra <- full_notas  %>% 
+  left_join(sessoes %>% select(-tema) %>% mutate(id = as.character(id)), by = c("id")) %>% 
+  left_join(oradores, by = c("orador")) %>% 
+  filter(intervalo == FALSE & presidente == FALSE & condicao == "SENADOR" & !is.na(depoente))%>% 
+  mutate(datahora = floor_date(data + as.duration(hora_inicio), unit = "5 minutes")) %>% 
+  group_by(datahora, orador) %>% 
+  summarise(duracao = sum(duracao), .groups = "drop") %>% 
+  group_by(datahora) %>% 
+  mutate(duracao = as.numeric(seconds(duracao)/sum(seconds(duracao)))) %>% 
+  arrange(desc(duracao), .by_group = TRUE) %>% 
+  distinct(datahora, .keep_all = TRUE)  %>% 
+  filter(duracao > 0.5) %>% 
+  mutate(data = date(datahora),
+         hora = as_hms(datahora)) %>% 
+  left_join(janelas_depoimento, by = c("data")) %>%
+  mutate(keep = ifelse(inicio_depoimento > hora | fim_depoimento < hora, FALSE, TRUE)) %>%
+  filter(keep == TRUE)
+
+
+resumo_depoimento <- full_notas %>% 
+  group_by(id) %>% 
+  summarise(inicio_sessao = min(floor_date(data + as.duration(hora_inicio), unit = "5 minutes")),
+            fim_sessao = max(floor_date(data + as.duration(hora_fim), unit = "5 minutes"))) %>% 
+  rowwise() %>% 
+  mutate(hora = list(seq.POSIXt(from = inicio_sessao, to = fim_sessao, by = as.duration("5 minutes")))) %>% 
+  unnest(cols = c(hora)) %>% 
+  mutate_if(is.POSIXct, as_hms) %>% 
+  left_join(janelas_depoimento, by = "id") %>% 
+  filter(!is.na(data)) %>% 
+  relocate(data, hora, .after = id) %>% 
+  left_join(palavra %>% ungroup %>% select(id, orador, hora), by = c("id", "hora"))
+
+
+resumo_ratings <- ratings %>% 
+  mutate(datahora = floor_date(datahora,  unit = "5 minutes")) %>% 
+  group_by(datahora) %>% 
+  summarise_if(is.numeric, mean) %>% 
+  ungroup %>% 
+  mutate(
+    data = date(datahora),
+    hora = as_hms(paste(hour(datahora),minute(datahora),"00", sep = ":"))
+  ) %>% 
+  select(-datahora)
+
+
+resumo_ratings %>% 
+  left_join(resumo_depoimento, by = c("data", "hora"))
+
+resumo_depoimento %>% 
+  left_join(resumo_ratings, by = c("data", "hora")) %>% 
+  mutate(share_noticias = scales::percent((globo_news + cnn_brasil) / total_tv)) %>% 
+  arrange(data, hora) %>% 
+  View
 
 
 ```

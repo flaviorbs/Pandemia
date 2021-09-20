@@ -3,3 +3,8 @@
 .RData
 .Ruserdata
 raw_data
+.Rdata
+.httr-oauth
+.DS_Store
+export.xls
+export.xlsx
